@@ -1,0 +1,1389 @@
+import React, { useState, useEffect, useCallback } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, collection, query, onSnapshot, addDoc, serverTimestamp, doc, deleteDoc } from 'firebase/firestore';
+import { Home, Phone, MapPin, Calendar, PlusCircle, User, Wrench, Hammer, Leaf, Lightbulb, Droplet, Paintbrush, Package, Sparkles, XCircle, DollarSign, BarChart2, CreditCard, Users, Clock, Image, ClipboardCheck, Trash2 } from 'lucide-react';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+
+// Firebase configuration (provided by the environment)
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+// Initialize Firebase
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+const auth = getAuth(app);
+
+// Predefined categories for services
+const categories = [
+  { name: 'Todos', icon: Home },
+  { name: 'Elétrica', icon: Lightbulb },
+  { name: 'Hidráulica', icon: Droplet },
+  { name: 'Alvenaria', icon: Hammer },
+  { name: 'Pintura', icon: Paintbrush },
+  { name: 'Marcenaria', icon: Wrench },
+  { name: 'Jardinagem', icon: Leaf },
+  { name: 'Pequenos Reparos', icon: Sparkles },
+  { name: 'Montagem de Móveis', icon: Package },
+  { name: 'Outros', icon: PlusCircle },
+];
+
+// Main App Component
+const App = () => {
+  const [professionals, setProfessionals] = useState([]);
+  const [clients, setClients] = useState([]); // New state for clients
+  const [payments, setPayments] = useState([]);
+  const [appointments, setAppointments] = useState([]); // New state for appointments
+
+  const [selectedCategory, setSelectedCategory] = useState('Todos');
+  const [activeSection, setActiveSection] = useState('professionals'); // 'professionals', 'addProfessional', 'addPayment', 'reports', 'clients', 'addClient', 'appointments', 'addAppointment'
+
+  const [newProfessional, setNewProfessional] = useState({
+    name: '',
+    whatsapp: '',
+    phone: '',
+    age: '',
+    location: '',
+    sectors: [],
+    pixKey: '',
+    availability: '',
+    notes: ''
+  });
+  const [newClient, setNewClient] = useState({ // New state for new client
+    name: '',
+    whatsapp: '',
+    phone: '',
+    address: '',
+    notes: ''
+  });
+  const [newPayment, setNewPayment] = useState({
+    professionalId: '',
+    amount: '',
+    date: new Date().toISOString().split('T')[0], // YYYY-MM-DD
+    category: ''
+  });
+  const [newAppointment, setNewAppointment] = useState({ // New state for new appointment
+    clientId: '',
+    professionalId: '',
+    date: new Date().toISOString().split('T')[0],
+    time: '',
+    description: '',
+    photoLink: '',
+    status: 'Pendente' // Default status
+  });
+
+  const [userId, setUserId] = useState(null);
+  const [isAuthReady, setIsAuthReady] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [reportPeriod, setReportPeriod] = useState('weekly'); // 'weekly', 'monthly', 'annually'
+
+  // State for confirmation modal
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const [itemToDelete, setItemToDelete] = useState(null); // { id, type, name }
+
+  // Authenticate and set up Firestore listener
+  useEffect(() => {
+    const setupFirebase = async () => {
+      try {
+        if (initialAuthToken) {
+          await signInWithCustomToken(auth, initialAuthToken);
+        } else {
+          await signInAnonymously(auth);
+        }
+      } catch (e) {
+        console.error("Erro na autenticação Firebase:", e);
+        setError("Erro ao autenticar no Firebase. Tente novamente.");
+      }
+    };
+
+    setupFirebase();
+
+    const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
+      if (user) {
+        setUserId(user.uid);
+        setIsAuthReady(true);
+      } else {
+        setUserId(null);
+        setIsAuthReady(true); // Still set to true even if no user, to proceed
+      }
+      setLoading(false);
+    });
+
+    return () => unsubscribeAuth();
+  }, []);
+
+  // Listen for real-time updates from Firestore for professionals
+  useEffect(() => {
+    if (!isAuthReady || !userId) return;
+
+    const professionalsCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/professionals`);
+    const q = query(professionalsCollectionRef);
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const professionalsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setProfessionals(professionalsData);
+    }, (err) => {
+      console.error("Erro ao carregar profissionais:", err);
+      setError("Erro ao carregar a lista de profissionais.");
+    });
+    return () => unsubscribe();
+  }, [isAuthReady, userId]);
+
+  // Listen for real-time updates from Firestore for clients
+  useEffect(() => {
+    if (!isAuthReady || !userId) return;
+
+    const clientsCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/clients`);
+    const q = query(clientsCollectionRef);
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const clientsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setClients(clientsData);
+    }, (err) => {
+      console.error("Erro ao carregar clientes:", err);
+      setError("Erro ao carregar a lista de clientes.");
+    });
+    return () => unsubscribe();
+  }, [isAuthReady, userId]);
+
+  // Listen for real-time updates from Firestore for payments
+  useEffect(() => {
+    if (!isAuthReady || !userId) return;
+
+    const paymentsCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/payments`);
+    const q = query(paymentsCollectionRef);
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const paymentsData = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data(),
+        // Safely convert Firestore Timestamp to Date object, or parse string date
+        date: doc.data().date
+          ? (typeof doc.data().date.toDate === 'function' ? doc.data().date.toDate() : new Date(doc.data().date))
+          : null
+      }));
+      setPayments(paymentsData);
+    }, (err) => {
+      console.error("Erro ao carregar pagamentos:", err);
+      setError("Erro ao carregar a lista de pagamentos.");
+    });
+    return () => unsubscribe();
+  }, [isAuthReady, userId]);
+
+  // Listen for real-time updates from Firestore for appointments
+  useEffect(() => {
+    if (!isAuthReady || !userId) return;
+
+    const appointmentsCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/appointments`);
+    const q = query(appointmentsCollectionRef);
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const appointmentsData = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data(),
+        // Safely convert Firestore Timestamp to Date object, or parse string date
+        date: doc.data().date
+          ? (typeof doc.data().date.toDate === 'function' ? doc.data().date.toDate() : new Date(doc.data().date))
+          : null
+      }));
+      setAppointments(appointmentsData);
+    }, (err) => {
+      console.error("Erro ao carregar agendamentos:", err);
+      setError("Erro ao carregar a lista de agendamentos.");
+    });
+    return () => unsubscribe();
+  }, [isAuthReady, userId]);
+
+  // Filter professionals based on selected category
+  const filteredProfessionals = selectedCategory === 'Todos'
+    ? professionals
+    : professionals.filter(p => p.sectors && p.sectors.includes(selectedCategory));
+
+  // Handle input changes for the new professional form
+  const handleProfessionalInputChange = (e) => {
+    const { name, value } = e.target;
+    setNewProfessional(prev => ({ ...prev, [name]: value }));
+  };
+
+  // Handle checkbox changes for sectors
+  const handleSectorChange = (e) => {
+    const { value, checked } = e.target;
+    setNewProfessional(prev => {
+      const newSectors = checked
+        ? [...prev.sectors, value]
+        : prev.sectors.filter(sector => sector !== value);
+      return { ...prev, sectors: newSectors };
+    });
+  };
+
+  // Add new professional to Firestore
+  const handleAddProfessional = async (e) => {
+    e.preventDefault();
+    if (!userId) { setError("Usuário não autenticado."); return; }
+    if (!newProfessional.name || newProfessional.sectors.length === 0) { setError("Nome e pelo menos um setor são obrigatórios."); return; }
+
+    try {
+      setLoading(true);
+      await addDoc(collection(db, `artifacts/${appId}/users/${userId}/professionals`), {
+        ...newProfessional,
+        createdAt: serverTimestamp(),
+      });
+      setNewProfessional({ name: '', whatsapp: '', phone: '', age: '', location: '', sectors: [], pixKey: '', availability: '', notes: '' });
+      setActiveSection('professionals'); // Go back to professionals list
+      setError(null);
+    } catch (e) {
+      console.error("Erro ao adicionar profissional:", e);
+      setError("Erro ao adicionar profissional. Verifique os campos e tente novamente.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Handle input changes for the new client form
+  const handleClientInputChange = (e) => {
+    const { name, value } = e.target;
+    setNewClient(prev => ({ ...prev, [name]: value }));
+  };
+
+  // Add new client to Firestore
+  const handleAddClient = async (e) => {
+    e.preventDefault();
+    if (!userId) { setError("Usuário não autenticado."); return; }
+    if (!newClient.name || !newClient.whatsapp) { setError("Nome e WhatsApp do cliente são obrigatórios."); return; }
+
+    try {
+      setLoading(true);
+      await addDoc(collection(db, `artifacts/${appId}/users/${userId}/clients`), {
+        ...newClient,
+        createdAt: serverTimestamp(),
+      });
+      setNewClient({ name: '', whatsapp: '', phone: '', address: '', notes: '' });
+      setActiveSection('clients'); // Go back to clients list
+      setError(null);
+    } catch (e) {
+      console.error("Erro ao adicionar cliente:", e);
+      setError("Erro ao adicionar cliente. Verifique os campos e tente novamente.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Handle input changes for the new payment form
+  const handlePaymentInputChange = (e) => {
+    const { name, value } = e.target;
+    setNewPayment(prev => ({ ...prev, [name]: value }));
+  };
+
+  // Add new payment to Firestore
+  const handleAddPayment = async (e) => {
+    e.preventDefault();
+    if (!userId) { setError("Usuário não autenticado."); return; }
+    if (!newPayment.professionalId || !newPayment.amount || !newPayment.date || !newPayment.category) { setError("Todos os campos de pagamento são obrigatórios."); return; }
+
+    try {
+      setLoading(true);
+      await addDoc(collection(db, `artifacts/${appId}/users/${userId}/payments`), {
+        professionalId: newPayment.professionalId,
+        amount: parseFloat(newPayment.amount),
+        date: new Date(newPayment.date), // Store as Date object
+        category: newPayment.category,
+        createdAt: serverTimestamp(),
+      });
+      setNewPayment({ professionalId: '', amount: '', date: new Date().toISOString().split('T')[0], category: '' });
+      setActiveSection('reports'); // Go to reports after payment
+      setError(null);
+    } catch (e) {
+      console.error("Erro ao adicionar pagamento:", e);
+      setError("Erro ao adicionar pagamento. Verifique os campos e tente novamente.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Handle input changes for the new appointment form
+  const handleAppointmentInputChange = (e) => {
+    const { name, value } = e.target;
+    setNewAppointment(prev => ({ ...prev, [name]: value }));
+  };
+
+  // Add new appointment to Firestore
+  const handleAddAppointment = async (e) => {
+    e.preventDefault();
+    if (!userId) { setError("Usuário não autenticado."); return; }
+    if (!newAppointment.clientId || !newAppointment.professionalId || !newAppointment.date || !newAppointment.description) { setError("Cliente, Profissional, Data e Descrição são obrigatórios para o agendamento."); return; }
+
+    try {
+      setLoading(true);
+      await addDoc(collection(db, `artifacts/${appId}/users/${userId}/appointments`), {
+        ...newAppointment,
+        createdAt: serverTimestamp(),
+      });
+      setNewAppointment({ clientId: '', professionalId: '', date: new Date().toISOString().split('T')[0], time: '', description: '', photoLink: '', status: 'Pendente' });
+      setActiveSection('appointments'); // Go back to appointments list
+      setError(null);
+    } catch (e) {
+      console.error("Erro ao adicionar agendamento:", e);
+      setError("Erro ao adicionar agendamento. Verifique os campos e tente novamente.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Function to open confirmation modal
+  const confirmDeletion = (id, type, name) => {
+    setItemToDelete({ id, type, name });
+    setShowConfirmModal(true);
+  };
+
+  // Function to handle actual deletion after confirmation
+  const executeDeletion = async () => {
+    if (!itemToDelete || !userId) {
+      setError("Erro: Item para exclusão ou ID de usuário ausente.");
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    try {
+      let collectionPath;
+      switch (itemToDelete.type) {
+        case 'professional':
+          collectionPath = `artifacts/${appId}/users/${userId}/professionals`;
+          break;
+        case 'client':
+          collectionPath = `artifacts/${appId}/users/${userId}/clients`;
+          break;
+        case 'appointment':
+          collectionPath = `artifacts/${appId}/users/${userId}/appointments`;
+          break;
+        default:
+          setError("Tipo de item inválido para exclusão.");
+          setLoading(false);
+          setShowConfirmModal(false);
+          return;
+      }
+      await deleteDoc(doc(db, collectionPath, itemToDelete.id));
+      console.log(`${itemToDelete.type} com ID ${itemToDelete.id} excluído com sucesso.`);
+    } catch (e) {
+      console.error(`Erro ao excluir ${itemToDelete.type}:`, e);
+      setError(`Erro ao excluir ${itemToDelete.type}. Tente novamente.`);
+    } finally {
+      setLoading(false);
+      setShowConfirmModal(false);
+      setItemToDelete(null);
+    }
+  };
+
+  // Calculate total payments by category
+  const getTotalPaymentsByCategory = useCallback(() => {
+    const totals = {};
+    payments.forEach(payment => {
+      const category = payment.category || 'Outros';
+      totals[category] = (totals[category] || 0) + payment.amount;
+    });
+    return totals;
+  }, [payments]);
+
+  // Prepare data for profit graph
+  const getProfitGraphData = useCallback(() => {
+    const data = {};
+    payments.forEach(payment => {
+      if (!payment.date) return;
+
+      let key;
+      // Ensure date is a Date object for calculations
+      const date = payment.date instanceof Date ? payment.date : new Date(payment.date);
+
+      if (reportPeriod === 'weekly') {
+        const startOfWeek = new Date(date);
+        startOfWeek.setDate(date.getDate() - date.getDay());
+        key = startOfWeek.toISOString().split('T')[0];
+      } else if (reportPeriod === 'monthly') {
+        key = `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}`;
+      } else { // annually
+        key = date.getFullYear().toString();
+      }
+
+      if (!data[key]) {
+        data[key] = { totalPaid: 0, profit: 0 };
+      }
+      data[key].totalPaid += payment.amount;
+      data[key].profit += payment.amount * 0.10; // 10% profit
+    });
+
+    const sortedKeys = Object.keys(data).sort();
+    return sortedKeys.map(key => ({
+      name: key,
+      'Valor Pago': data[key].totalPaid.toFixed(2),
+      'Lucro (10%)': data[key].profit.toFixed(2),
+    }));
+  }, [payments, reportPeriod]);
+
+  // Get pending/overdue appointments for today or past
+  const getPendingAppointments = useCallback(() => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0); // Normalize to start of day
+
+    return appointments.filter(appt => {
+      if (appt.status === 'Concluído' || appt.status === 'Cancelado') return false;
+
+      // Ensure appt.date is a Date object for comparison
+      const apptDate = appt.date instanceof Date ? appt.date : new Date(appt.date);
+      apptDate.setHours(0, 0, 0, 0);
+
+      // Check if appointment date is today or in the past
+      return apptDate <= today;
+    }).sort((a, b) => {
+      // Ensure dates are Date objects for sorting
+      const dateA = a.date instanceof Date ? a.date : new Date(a.date);
+      const dateB = b.date instanceof Date ? b.date : new Date(b.date);
+      return dateA.getTime() - dateB.getTime(); // Sort by date ascending
+    });
+  }, [appointments]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-gray-100">
+        <div className="text-xl font-semibold text-gray-700">Carregando...</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4 font-inter">
+      <div className="max-w-6xl mx-auto bg-white rounded-xl shadow-2xl p-6 md:p-8">
+        <h1 className="text-3xl md:text-4xl font-extrabold text-gray-800 text-center mb-8">
+          Paco Faz Tudo <span className="text-blue-600">| Gestão Completa</span>
+        </h1>
+
+        {error && (
+          <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative mb-4" role="alert">
+            <strong className="font-bold">Erro:</strong>
+            <span className="block sm:inline"> {error}</span>
+            <span className="absolute top-0 bottom-0 right-0 px-4 py-3" onClick={() => setError(null)}>
+              <XCircle className="h-6 w-6 text-red-500 cursor-pointer" />
+            </span>
+          </div>
+        )}
+
+        {/* User ID Display */}
+        {userId && (
+          <div className="text-center text-sm text-gray-600 mb-6 p-2 bg-gray-50 rounded-lg shadow-inner">
+            Seu ID de Usuário: <span className="font-mono text-blue-700 break-all">{userId}</span>
+          </div>
+        )}
+
+        {/* Main Navigation Buttons */}
+        <div className="flex flex-wrap justify-center gap-4 mb-8">
+          <button
+            onClick={() => setActiveSection('professionals')}
+            className={`flex items-center justify-center p-3 rounded-xl shadow-md transition-all duration-300 ease-in-out
+              ${activeSection === 'professionals'
+                ? 'bg-blue-600 text-white transform scale-105 ring-2 ring-blue-400'
+                : 'bg-gray-200 text-gray-700 hover:bg-blue-100 hover:text-blue-700'
+              }`}
+          >
+            <User className="w-5 h-5 mr-2" />
+            <span className="font-semibold text-sm md:text-base">Profissionais</span>
+          </button>
+          <button
+            onClick={() => setActiveSection('clients')}
+            className={`flex items-center justify-center p-3 rounded-xl shadow-md transition-all duration-300 ease-in-out
+              ${activeSection === 'clients'
+                ? 'bg-blue-600 text-white transform scale-105 ring-2 ring-blue-400'
+                : 'bg-gray-200 text-gray-700 hover:bg-blue-100 hover:text-blue-700'
+              }`}
+          >
+            <Users className="w-5 h-5 mr-2" />
+            <span className="font-semibold text-sm md:text-base">Clientes</span>
+          </button>
+          <button
+            onClick={() => setActiveSection('appointments')}
+            className={`flex items-center justify-center p-3 rounded-xl shadow-md transition-all duration-300 ease-in-out
+              ${activeSection === 'appointments'
+                ? 'bg-blue-600 text-white transform scale-105 ring-2 ring-blue-400'
+                : 'bg-gray-200 text-gray-700 hover:bg-blue-100 hover:text-blue-700'
+              }`}
+          >
+            <Calendar className="w-5 h-5 mr-2" />
+            <span className="font-semibold text-sm md:text-base">Agendamentos</span>
+          </button>
+          <button
+            onClick={() => setActiveSection('addProfessional')}
+            className={`flex items-center justify-center p-3 rounded-xl shadow-md transition-all duration-300 ease-in-out
+              ${activeSection === 'addProfessional'
+                ? 'bg-blue-600 text-white transform scale-105 ring-2 ring-blue-400'
+                : 'bg-gray-200 text-gray-700 hover:bg-blue-100 hover:text-blue-700'
+              }`}
+          >
+            <PlusCircle className="w-5 h-5 mr-2" />
+            <span className="font-semibold text-sm md:text-base">Cadastrar Profissional</span>
+          </button>
+          <button
+            onClick={() => setActiveSection('addClient')}
+            className={`flex items-center justify-center p-3 rounded-xl shadow-md transition-all duration-300 ease-in-out
+              ${activeSection === 'addClient'
+                ? 'bg-blue-600 text-white transform scale-105 ring-2 ring-blue-400'
+                : 'bg-gray-200 text-gray-700 hover:bg-blue-100 hover:text-blue-700'
+              }`}
+          >
+            <PlusCircle className="w-5 h-5 mr-2" />
+            <span className="font-semibold text-sm md:text-base">Cadastrar Cliente</span>
+          </button>
+          <button
+            onClick={() => setActiveSection('addAppointment')}
+            className={`flex items-center justify-center p-3 rounded-xl shadow-md transition-all duration-300 ease-in-out
+              ${activeSection === 'addAppointment'
+                ? 'bg-blue-600 text-white transform scale-105 ring-2 ring-blue-400'
+                : 'bg-gray-200 text-gray-700 hover:bg-blue-100 hover:text-blue-700'
+              }`}
+          >
+            <PlusCircle className="w-5 h-5 mr-2" />
+            <span className="font-semibold text-sm md:text-base">Agendar Serviço</span>
+          </button>
+          <button
+            onClick={() => setActiveSection('addPayment')}
+            className={`flex items-center justify-center p-3 rounded-xl shadow-md transition-all duration-300 ease-in-out
+              ${activeSection === 'addPayment'
+                ? 'bg-blue-600 text-white transform scale-105 ring-2 ring-blue-400'
+                : 'bg-gray-200 text-gray-700 hover:bg-blue-100 hover:text-blue-700'
+              }`}
+          >
+            <DollarSign className="w-5 h-5 mr-2" />
+            <span className="font-semibold text-sm md:text-base">Registrar Pagamento</span>
+          </button>
+          <button
+            onClick={() => setActiveSection('reports')}
+            className={`flex items-center justify-center p-3 rounded-xl shadow-md transition-all duration-300 ease-in-out
+              ${activeSection === 'reports'
+                ? 'bg-blue-600 text-white transform scale-105 ring-2 ring-blue-400'
+                : 'bg-gray-200 text-gray-700 hover:bg-blue-100 hover:text-blue-700'
+              }`}
+          >
+            <BarChart2 className="w-5 h-5 mr-2" />
+            <span className="font-semibold text-sm md:text-base">Relatórios Financeiros</span>
+          </button>
+        </div>
+
+        {/* Pending Appointments Alert */}
+        {activeSection !== 'addAppointment' && getPendingAppointments().length > 0 && (
+          <div className="bg-yellow-100 border border-yellow-400 text-yellow-700 px-4 py-3 rounded relative mb-4" role="alert">
+            <strong className="font-bold">Atenção!</strong>
+            <span className="block sm:inline"> Você tem {getPendingAppointments().length} agendamento(s) pendente(s) ou atrasado(s):</span>
+            <ul className="list-disc list-inside mt-2">
+              {getPendingAppointments().map(appt => {
+                const clientName = clients.find(c => c.id === appt.clientId)?.name || 'Cliente Desconhecido';
+                const profName = professionals.find(p => p.id === appt.professionalId)?.name || 'Profissional Desconhecido';
+                return (
+                  <li key={appt.id}>
+                    {appt.description} com {profName} para {clientName} em {appt.date?.toLocaleDateString()} às {appt.time || 'Não especificado'}.
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
+
+        {/* Section: Professionals List */}
+        {activeSection === 'professionals' && (
+          <>
+            {/* Category Buttons for Professionals */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 mb-8">
+              {categories.map((category) => {
+                const Icon = category.icon;
+                return (
+                  <button
+                    key={category.name}
+                    onClick={() => setSelectedCategory(category.name)}
+                    className={`flex items-center justify-center p-3 rounded-xl shadow-md transition-all duration-300 ease-in-out
+                      ${selectedCategory === category.name
+                        ? 'bg-blue-600 text-white transform scale-105 ring-2 ring-blue-400'
+                        : 'bg-gray-200 text-gray-700 hover:bg-blue-100 hover:text-blue-700'
+                      }`}
+                  >
+                    <Icon className="w-5 h-5 mr-2" />
+                    <span className="font-semibold text-sm md:text-base">{category.name}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="bg-white rounded-xl shadow-xl p-6">
+              <h2 className="text-2xl font-bold text-gray-800 mb-6 text-center">
+                Profissionais em <span className="text-blue-600">{selectedCategory}</span>
+              </h2>
+              {filteredProfessionals.length === 0 ? (
+                <p className="text-center text-gray-600 text-lg py-8">Nenhum profissional encontrado nesta categoria.</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="min-w-full bg-white rounded-lg overflow-hidden">
+                    <thead className="bg-gray-100 border-b border-gray-200">
+                      <tr>
+                        <th className="py-3 px-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">Nome</th>
+                        <th className="py-3 px-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">WhatsApp</th>
+                        <th className="py-3 px-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider hidden sm:table-cell">Telefone</th>
+                        <th className="py-3 px-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider hidden md:table-cell">Idade</th>
+                        <th className="py-3 px-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider hidden lg:table-cell">Localização</th>
+                        <th className="py-3 px-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider hidden md:table-cell">Setores</th>
+                        <th className="py-3 px-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider hidden lg:table-cell">Pix</th>
+                        <th className="py-3 px-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider hidden lg:table-cell">Disponibilidade</th>
+                        <th className="py-3 px-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider hidden xl:table-cell">Observações</th>
+                        <th className="py-3 px-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">Pagamentos</th>
+                        <th className="py-3 px-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">Ações</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredProfessionals.map((professional) => (
+                        <tr key={professional.id} className="border-b border-gray-100 hover:bg-gray-50 transition-colors duration-200">
+                          <td className="py-3 px-4 text-sm text-gray-800 font-medium flex items-center">
+                            <User className="w-4 h-4 mr-2 text-blue-500" />
+                            {professional.name}
+                          </td>
+                          <td className="py-3 px-4 text-sm">
+                            {professional.whatsapp ? (
+                              <a
+                                href={`https://wa.me/${professional.whatsapp.replace(/\D/g, '')}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-green-600 hover:text-green-700 flex items-center font-medium"
+                              >
+                                <Phone className="w-4 h-4 mr-1" />
+                                {professional.whatsapp}
+                              </a>
+                            ) : (
+                              <span className="text-gray-500">-</span>
+                            )}
+                          </td>
+                          <td className="py-3 px-4 text-sm text-gray-700 hidden sm:table-cell">
+                            {professional.phone || '-'}
+                          </td>
+                          <td className="py-3 px-4 text-sm text-gray-700 hidden md:table-cell">
+                            {professional.age || '-'}
+                          </td>
+                          <td className="py-3 px-4 text-sm text-gray-700 hidden lg:table-cell flex items-center">
+                            {professional.location ? (
+                              <>
+                                <MapPin className="w-4 h-4 mr-1 text-red-500" />
+                                {professional.location}
+                              </>
+                            ) : (
+                              '-'
+                            )}
+                          </td>
+                          <td className="py-3 px-4 text-sm text-gray-700 hidden md:table-cell">
+                            {professional.sectors && professional.sectors.length > 0
+                              ? professional.sectors.join(', ')
+                              : '-'}
+                          </td>
+                          <td className="py-3 px-4 text-sm text-gray-700 hidden lg:table-cell flex items-center">
+                            {professional.pixKey ? (
+                              <>
+                                <CreditCard className="w-4 h-4 mr-1 text-purple-500" />
+                                {professional.pixKey}
+                              </>
+                            ) : (
+                              '-'
+                            )}
+                          </td>
+                          <td className="py-3 px-4 text-sm text-gray-700 hidden lg:table-cell">
+                            {professional.availability || '-'}
+                          </td>
+                          <td className="py-3 px-4 text-sm text-gray-700 hidden xl:table-cell">
+                            {professional.notes || '-'}
+                          </td>
+                          <td className="py-3 px-4 text-sm">
+                            <div className="flex flex-col gap-1">
+                              {payments
+                                .filter(p => p.professionalId === professional.id)
+                                .sort((a, b) => {
+                                  // Ensure dates are Date objects for sorting
+                                  const dateA = a.date instanceof Date ? a.date : new Date(a.date);
+                                  const dateB = b.date instanceof Date ? b.date : new Date(b.date);
+                                  return dateB.getTime() - dateA.getTime(); // Sort by date descending
+                                })
+                                .map((payment, index) => (
+                                  <span key={payment.id} className="text-xs text-gray-600 bg-gray-100 rounded-md px-2 py-1">
+                                    R$ {payment.amount.toFixed(2)} ({payment.date?.toLocaleDateString()}) - {payment.category}
+                                  </span>
+                                ))}
+                              {payments.filter(p => p.professionalId === professional.id).length === 0 && (
+                                <span className="text-xs text-gray-500">- Nenhum pagamento -</span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="py-3 px-4 text-sm">
+                            <button
+                              onClick={() => confirmDeletion(professional.id, 'professional', professional.name)}
+                              className="text-red-600 hover:text-red-800 transition-colors"
+                              title="Excluir Profissional"
+                            >
+                              <Trash2 className="w-5 h-5" />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </>
+        )}
+
+        {/* Section: Clients List */}
+        {activeSection === 'clients' && (
+          <div className="bg-white rounded-xl shadow-xl p-6">
+            <h2 className="text-2xl font-bold text-gray-800 mb-6 text-center">Seus Clientes</h2>
+            {clients.length === 0 ? (
+              <p className="text-center text-gray-600 text-lg py-8">Nenhum cliente cadastrado ainda.</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="min-w-full bg-white rounded-lg overflow-hidden">
+                  <thead className="bg-gray-100 border-b border-gray-200">
+                    <tr>
+                      <th className="py-3 px-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">Nome</th>
+                      <th className="py-3 px-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">WhatsApp</th>
+                      <th className="py-3 px-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider hidden sm:table-cell">Telefone</th>
+                      <th className="py-3 px-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider hidden md:table-cell">Endereço</th>
+                      <th className="py-3 px-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider hidden lg:table-cell">Observações</th>
+                      <th className="py-3 px-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">Ações</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {clients.map((client) => (
+                      <tr key={client.id} className="border-b border-gray-100 hover:bg-gray-50 transition-colors duration-200">
+                        <td className="py-3 px-4 text-sm text-gray-800 font-medium flex items-center">
+                          <Users className="w-4 h-4 mr-2 text-blue-500" />
+                          {client.name}
+                        </td>
+                        <td className="py-3 px-4 text-sm">
+                          {client.whatsapp ? (
+                            <a
+                              href={`https://wa.me/${client.whatsapp.replace(/\D/g, '')}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-green-600 hover:text-green-700 flex items-center font-medium"
+                            >
+                              <Phone className="w-4 h-4 mr-1" />
+                              {client.whatsapp}
+                            </a>
+                          ) : (
+                            <span className="text-gray-500">-</span>
+                          )}
+                        </td>
+                        <td className="py-3 px-4 text-sm text-gray-700 hidden sm:table-cell">
+                          {client.phone || '-'}
+                        </td>
+                        <td className="py-3 px-4 text-sm text-gray-700 hidden md:table-cell">
+                          {client.address || '-'}
+                        </td>
+                        <td className="py-3 px-4 text-sm text-gray-700 hidden lg:table-cell">
+                          {client.notes || '-'}
+                        </td>
+                        <td className="py-3 px-4 text-sm">
+                          <button
+                            onClick={() => confirmDeletion(client.id, 'client', client.name)}
+                            className="text-red-600 hover:text-red-800 transition-colors"
+                            title="Excluir Cliente"
+                          >
+                            <Trash2 className="w-5 h-5" />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Section: Appointments List */}
+        {activeSection === 'appointments' && (
+          <div className="bg-white rounded-xl shadow-xl p-6">
+            <h2 className="text-2xl font-bold text-gray-800 mb-6 text-center">Agendamentos de Serviços</h2>
+            {appointments.length === 0 ? (
+              <p className="text-center text-gray-600 text-lg py-8">Nenhum agendamento cadastrado ainda.</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="min-w-full bg-white rounded-lg overflow-hidden">
+                  <thead className="bg-gray-100 border-b border-gray-200">
+                    <tr>
+                      <th className="py-3 px-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">Data</th>
+                      <th className="py-3 px-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">Hora</th>
+                      <th className="py-3 px-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">Cliente</th>
+                      <th className="py-3 px-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">Profissional</th>
+                      <th className="py-3 px-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">Descrição</th>
+                      <th className="py-3 px-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">Status</th>
+                      <th className="py-3 px-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider hidden md:table-cell">Fotos/Prints</th>
+                      <th className="py-3 px-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">Ações</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {appointments.sort((a,b) => {
+                      // Ensure dates are Date objects for sorting
+                      const dateA = a.date instanceof Date ? a.date : new Date(a.date);
+                      const dateB = b.date instanceof Date ? b.date : new Date(b.date);
+                      return dateB.getTime() - dateA.getTime(); // Sort by date descending
+                    }).map((appt) => {
+                      const clientName = clients.find(c => c.id === appt.clientId)?.name || 'Cliente Desconhecido';
+                      const profName = professionals.find(p => p.id === appt.professionalId)?.name || 'Profissional Desconhecido';
+                      return (
+                        <tr key={appt.id} className="border-b border-gray-100 hover:bg-gray-50 transition-colors duration-200">
+                          <td className="py-3 px-4 text-sm text-gray-800 font-medium flex items-center">
+                            <Calendar className="w-4 h-4 mr-2 text-blue-500" />
+                            {appt.date?.toLocaleDateString()}
+                          </td>
+                          <td className="py-3 px-4 text-sm text-gray-700">
+                            {appt.time || '-'}
+                          </td>
+                          <td className="py-3 px-4 text-sm text-gray-700">
+                            {clientName}
+                          </td>
+                          <td className="py-3 px-4 text-sm text-gray-700">
+                            {profName}
+                          </td>
+                          <td className="py-3 px-4 text-sm text-gray-700">
+                            {appt.description}
+                          </td>
+                          <td className="py-3 px-4 text-sm">
+                            <span className={`px-2 py-1 rounded-full text-xs font-semibold
+                              ${appt.status === 'Concluído' ? 'bg-green-100 text-green-800' :
+                                appt.status === 'Pendente' ? 'bg-yellow-100 text-yellow-800' :
+                                'bg-red-100 text-red-800'
+                              }`}
+                            >
+                              {appt.status}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 text-sm text-gray-700 hidden md:table-cell">
+                            {appt.photoLink ? (
+                              <a href={appt.photoLink} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline flex items-center">
+                                <Image className="w-4 h-4 mr-1" />
+                                Ver Imagem
+                              </a>
+                            ) : (
+                              '-'
+                            )}
+                          </td>
+                          <td className="py-3 px-4 text-sm">
+                            <button
+                              onClick={() => confirmDeletion(appt.id, 'appointment', appt.description)}
+                              className="text-red-600 hover:text-red-800 transition-colors"
+                              title="Excluir Agendamento"
+                            >
+                              <Trash2 className="w-5 h-5" />
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Section: Add Professional Form */}
+        {activeSection === 'addProfessional' && (
+          <div className="bg-blue-50 p-6 rounded-xl shadow-inner mb-8">
+            <h2 className="text-2xl font-bold text-blue-800 mb-6 text-center">Cadastrar Novo Profissional</h2>
+            <form onSubmit={handleAddProfessional} className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div>
+                <label htmlFor="name" className="block text-gray-700 text-sm font-bold mb-2">Nome Completo:</label>
+                <input
+                  type="text"
+                  id="name"
+                  name="name"
+                  value={newProfessional.name}
+                  onChange={handleProfessionalInputChange}
+                  placeholder="Nome do Profissional"
+                  className="shadow appearance-none border rounded-xl w-full py-3 px-4 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-blue-400"
+                  required
+                />
+              </div>
+              <div>
+                <label htmlFor="whatsapp" className="block text-gray-700 text-sm font-bold mb-2">WhatsApp:</label>
+                <input
+                  type="tel"
+                  id="whatsapp"
+                  name="whatsapp"
+                  value={newProfessional.whatsapp}
+                  onChange={handleProfessionalInputChange}
+                  placeholder="(XX) XXXXX-XXXX"
+                  className="shadow appearance-none border rounded-xl w-full py-3 px-4 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-blue-400"
+                />
+              </div>
+              <div>
+                <label htmlFor="phone" className="block text-gray-700 text-sm font-bold mb-2">Telefone (Alternativo):</label>
+                <input
+                  type="tel"
+                  id="phone"
+                  name="phone"
+                  value={newProfessional.phone}
+                  onChange={handleProfessionalInputChange}
+                  placeholder="(XX) XXXX-XXXX"
+                  className="shadow appearance-none border rounded-xl w-full py-3 px-4 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-blue-400"
+                />
+              </div>
+              <div>
+                <label htmlFor="age" className="block text-gray-700 text-sm font-bold mb-2">Idade:</label>
+                <input
+                  type="number"
+                  id="age"
+                  name="age"
+                  value={newProfessional.age}
+                  onChange={handleProfessionalInputChange}
+                  placeholder="Ex: 35"
+                  className="shadow appearance-none border rounded-xl w-full py-3 px-4 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-blue-400"
+                />
+              </div>
+              <div className="col-span-1 md:col-span-2">
+                <label htmlFor="location" className="block text-gray-700 text-sm font-bold mb-2">Localização (Cidade/Bairro):</label>
+                <input
+                  type="text"
+                  id="location"
+                  name="location"
+                  value={newProfessional.location}
+                  onChange={handleProfessionalInputChange}
+                  placeholder="Ex: São Paulo/Centro"
+                  className="shadow appearance-none border rounded-xl w-full py-3 px-4 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-blue-400"
+                />
+              </div>
+              <div>
+                <label htmlFor="pixKey" className="block text-gray-700 text-sm font-bold mb-2">Chave Pix:</label>
+                <input
+                  type="text"
+                  id="pixKey"
+                  name="pixKey"
+                  value={newProfessional.pixKey}
+                  onChange={handleProfessionalInputChange}
+                  placeholder="Ex: email@pix.com ou CPF"
+                  className="shadow appearance-none border rounded-xl w-full py-3 px-4 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-blue-400"
+                />
+              </div>
+              <div>
+                <label htmlFor="availability" className="block text-gray-700 text-sm font-bold mb-2">Horário e Disponibilidade:</label>
+                <input
+                  type="text"
+                  id="availability"
+                  name="availability"
+                  value={newProfessional.availability}
+                  onChange={handleProfessionalInputChange}
+                  placeholder="Ex: Seg-Sex 8h-18h, Finais de semana"
+                  className="shadow appearance-none border rounded-xl w-full py-3 px-4 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-blue-400"
+                />
+              </div>
+              <div className="col-span-1 md:col-span-2">
+                <label className="block text-gray-700 text-sm font-bold mb-2">Setores de Atuação:</label>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                  {categories.filter(cat => cat.name !== 'Todos').map(cat => (
+                    <label key={cat.name} className="inline-flex items-center">
+                      <input
+                        type="checkbox"
+                        value={cat.name}
+                        checked={newProfessional.sectors.includes(cat.name)}
+                        onChange={handleSectorChange}
+                        className="form-checkbox h-5 w-5 text-blue-600 rounded-md"
+                      />
+                      <span className="ml-2 text-gray-700 text-sm">{cat.name}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div className="col-span-1 md:col-span-2">
+                <label htmlFor="notes" className="block text-gray-700 text-sm font-bold mb-2">Observações:</label>
+                <textarea
+                  id="notes"
+                  name="notes"
+                  value={newProfessional.notes}
+                  onChange={handleProfessionalInputChange}
+                  rows="3"
+                  placeholder="Informações adicionais sobre o profissional..."
+                  className="shadow appearance-none border rounded-xl w-full py-3 px-4 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-blue-400"
+                ></textarea>
+              </div>
+              <div className="col-span-1 md:col-span-2 flex justify-center">
+                <button
+                  type="submit"
+                  className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-8 rounded-xl shadow-lg transition-transform transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-opacity-75"
+                  disabled={loading}
+                >
+                  {loading ? 'Adicionando...' : 'Salvar Profissional'}
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
+
+        {/* Section: Add Client Form */}
+        {activeSection === 'addClient' && (
+          <div className="bg-orange-50 p-6 rounded-xl shadow-inner mb-8">
+            <h2 className="text-2xl font-bold text-orange-800 mb-6 text-center">Cadastrar Novo Cliente</h2>
+            <form onSubmit={handleAddClient} className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div>
+                <label htmlFor="clientName" className="block text-gray-700 text-sm font-bold mb-2">Nome Completo:</label>
+                <input
+                  type="text"
+                  id="clientName"
+                  name="name"
+                  value={newClient.name}
+                  onChange={handleClientInputChange}
+                  placeholder="Nome do Cliente"
+                  className="shadow appearance-none border rounded-xl w-full py-3 px-4 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-orange-400"
+                  required
+                />
+              </div>
+              <div>
+                <label htmlFor="clientWhatsapp" className="block text-gray-700 text-sm font-bold mb-2">WhatsApp:</label>
+                <input
+                  type="tel"
+                  id="clientWhatsapp"
+                  name="whatsapp"
+                  value={newClient.whatsapp}
+                  onChange={handleClientInputChange}
+                  placeholder="(XX) XXXXX-XXXX"
+                  className="shadow appearance-none border rounded-xl w-full py-3 px-4 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-orange-400"
+                  required
+                />
+              </div>
+              <div>
+                <label htmlFor="clientPhone" className="block text-gray-700 text-sm font-bold mb-2">Telefone (Alternativo):</label>
+                <input
+                  type="tel"
+                  id="clientPhone"
+                  name="phone"
+                  value={newClient.phone}
+                  onChange={handleClientInputChange}
+                  placeholder="(XX) XXXX-XXXX"
+                  className="shadow appearance-none border rounded-xl w-full py-3 px-4 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-orange-400"
+                />
+              </div>
+              <div className="col-span-1 md:col-span-2">
+                <label htmlFor="clientAddress" className="block text-gray-700 text-sm font-bold mb-2">Endereço Completo:</label>
+                <input
+                  type="text"
+                  id="clientAddress"
+                  name="address"
+                  value={newClient.address}
+                  onChange={handleClientInputChange}
+                  placeholder="Rua, Número, Bairro, Cidade, UF"
+                  className="shadow appearance-none border rounded-xl w-full py-3 px-4 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-orange-400"
+                />
+              </div>
+              <div className="col-span-1 md:col-span-2">
+                <label htmlFor="clientNotes" className="block text-gray-700 text-sm font-bold mb-2">Observações:</label>
+                <textarea
+                  id="clientNotes"
+                  name="notes"
+                  value={newClient.notes}
+                  onChange={handleClientInputChange}
+                  rows="3"
+                  placeholder="Informações adicionais sobre o cliente..."
+                  className="shadow appearance-none border rounded-xl w-full py-3 px-4 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-orange-400"
+                ></textarea>
+              </div>
+              <div className="col-span-1 md:col-span-2 flex justify-center">
+                <button
+                  type="submit"
+                  className="bg-orange-600 hover:bg-orange-700 text-white font-bold py-3 px-8 rounded-xl shadow-lg transition-transform transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-orange-400 focus:ring-opacity-75"
+                  disabled={loading}
+                >
+                  {loading ? 'Adicionando...' : 'Salvar Cliente'}
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
+
+        {/* Section: Add Appointment Form */}
+        {activeSection === 'addAppointment' && (
+          <div className="bg-indigo-50 p-6 rounded-xl shadow-inner mb-8">
+            <h2 className="text-2xl font-bold text-indigo-800 mb-6 text-center">Agendar Novo Serviço</h2>
+            <form onSubmit={handleAddAppointment} className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div>
+                <label htmlFor="appointmentClient" className="block text-gray-700 text-sm font-bold mb-2">Cliente:</label>
+                <select
+                  id="appointmentClient"
+                  name="clientId"
+                  value={newAppointment.clientId}
+                  onChange={handleAppointmentInputChange}
+                  className="shadow appearance-none border rounded-xl w-full py-3 px-4 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                  required
+                >
+                  <option value="">Selecione um cliente</option>
+                  {clients.map(c => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label htmlFor="appointmentProfessional" className="block text-gray-700 text-sm font-bold mb-2">Profissional:</label>
+                <select
+                  id="appointmentProfessional"
+                  name="professionalId"
+                  value={newAppointment.professionalId}
+                  onChange={handleAppointmentInputChange}
+                  className="shadow appearance-none border rounded-xl w-full py-3 px-4 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                  required
+                >
+                  <option value="">Selecione um profissional</option>
+                  {professionals.map(p => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label htmlFor="appointmentDate" className="block text-gray-700 text-sm font-bold mb-2">Data do Serviço:</label>
+                <input
+                  type="date"
+                  id="appointmentDate"
+                  name="date"
+                  value={newAppointment.date}
+                  onChange={handleAppointmentInputChange}
+                  className="shadow appearance-none border rounded-xl w-full py-3 px-4 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                  required
+                />
+              </div>
+              <div>
+                <label htmlFor="appointmentTime" className="block text-gray-700 text-sm font-bold mb-2">Hora do Serviço:</label>
+                <input
+                  type="time"
+                  id="appointmentTime"
+                  name="time"
+                  value={newAppointment.time}
+                  onChange={handleAppointmentInputChange}
+                  placeholder="Ex: 14:00"
+                  className="shadow appearance-none border rounded-xl w-full py-3 px-4 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                />
+              </div>
+              <div className="col-span-1 md:col-span-2">
+                <label htmlFor="appointmentDescription" className="block text-gray-700 text-sm font-bold mb-2">Descrição do Serviço:</label>
+                <textarea
+                  id="appointmentDescription"
+                  name="description"
+                  value={newAppointment.description}
+                  onChange={handleAppointmentInputChange}
+                  rows="3"
+                  placeholder="Detalhes do serviço a ser realizado..."
+                  className="shadow appearance-none border rounded-xl w-full py-3 px-4 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                  required
+                ></textarea>
+              </div>
+              <div className="col-span-1 md:col-span-2">
+                <label htmlFor="appointmentPhotoLink" className="block text-gray-700 text-sm font-bold mb-2">Link de Fotos/Prints (Opcional):</label>
+                <input
+                  type="url"
+                  id="appointmentPhotoLink"
+                  name="photoLink"
+                  value={newAppointment.photoLink}
+                  onChange={handleAppointmentInputChange}
+                  placeholder="Cole o link da imagem aqui (ex: Google Photos, Imgur)"
+                  className="shadow appearance-none border rounded-xl w-full py-3 px-4 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                />
+              </div>
+              <div>
+                <label htmlFor="appointmentStatus" className="block text-gray-700 text-sm font-bold mb-2">Status do Serviço:</label>
+                <select
+                  id="appointmentStatus"
+                  name="status"
+                  value={newAppointment.status}
+                  onChange={handleAppointmentInputChange}
+                  className="shadow appearance-none border rounded-xl w-full py-3 px-4 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                >
+                  <option value="Pendente">Pendente</option>
+                  <option value="Concluído">Concluído</option>
+                  <option value="Cancelado">Cancelado</option>
+                </select>
+              </div>
+              <div className="col-span-1 md:col-span-2 flex justify-center">
+                <button
+                  type="submit"
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-8 rounded-xl shadow-lg transition-transform transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:ring-opacity-75"
+                  disabled={loading}
+                >
+                  {loading ? 'Agendando...' : 'Salvar Agendamento'}
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
+
+        {/* Section: Register Payment Form */}
+        {activeSection === 'addPayment' && (
+          <div className="bg-green-50 p-6 rounded-xl shadow-inner mb-8">
+            <h2 className="text-2xl font-bold text-green-800 mb-6 text-center">Registrar Novo Pagamento</h2>
+            <form onSubmit={handleAddPayment} className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div>
+                <label htmlFor="paymentProfessionalId" className="block text-gray-700 text-sm font-bold mb-2">Profissional:</label>
+                <select
+                  id="paymentProfessionalId"
+                  name="professionalId"
+                  value={newPayment.professionalId}
+                  onChange={handlePaymentInputChange}
+                  className="shadow appearance-none border rounded-xl w-full py-3 px-4 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-green-400"
+                  required
+                >
+                  <option value="">Selecione um profissional</option>
+                  {professionals.map(p => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label htmlFor="amount" className="block text-gray-700 text-sm font-bold mb-2">Valor Pago (R$):</label>
+                <input
+                  type="number"
+                  id="amount"
+                  name="amount"
+                  value={newPayment.amount}
+                  onChange={handlePaymentInputChange}
+                  placeholder="Ex: 150.00"
+                  step="0.01"
+                  className="shadow appearance-none border rounded-xl w-full py-3 px-4 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-green-400"
+                  required
+                />
+              </div>
+              <div>
+                <label htmlFor="date" className="block text-gray-700 text-sm font-bold mb-2">Data do Pagamento:</label>
+                <input
+                  type="date"
+                  id="date"
+                  name="date"
+                  value={newPayment.date}
+                  onChange={handlePaymentInputChange}
+                  className="shadow appearance-none border rounded-xl w-full py-3 px-4 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-green-400"
+                  required
+                />
+              </div>
+              <div>
+                <label htmlFor="category" className="block text-gray-700 text-sm font-bold mb-2">Categoria do Serviço:</label>
+                <select
+                  id="category"
+                  name="category"
+                  value={newPayment.category}
+                  onChange={handlePaymentInputChange}
+                  className="shadow appearance-none border rounded-xl w-full py-3 px-4 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-green-400"
+                  required
+                >
+                  <option value="">Selecione uma categoria</option>
+                  {categories.filter(cat => cat.name !== 'Todos').map(cat => (
+                    <option key={cat.name} value={cat.name}>{cat.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="col-span-1 md:col-span-2 flex justify-center">
+                <button
+                  type="submit"
+                  className="bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-8 rounded-xl shadow-lg transition-transform transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-green-400 focus:ring-opacity-75"
+                  disabled={loading}
+                >
+                  {loading ? 'Registrando...' : 'Salvar Pagamento'}
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
+
+        {/* Section: Financial Reports */}
+        {activeSection === 'reports' && (
+          <div className="bg-purple-50 p-6 rounded-xl shadow-inner mb-8">
+            <h2 className="text-2xl font-bold text-purple-800 mb-6 text-center">Relatórios Financeiros</h2>
+
+            {/* Total Payments by Category */}
+            <div className="mb-8">
+              <h3 className="text-xl font-semibold text-gray-700 mb-4">Valores Movimentados por Categoria:</h3>
+              {Object.keys(getTotalPaymentsByCategory()).length === 0 ? (
+                <p className="text-center text-gray-600">Nenhum pagamento registrado ainda.</p>
+              ) : (
+                <ul className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  {Object.entries(getTotalPaymentsByCategory()).map(([category, total]) => (
+                    <li key={category} className="bg-purple-100 p-4 rounded-lg shadow-sm flex justify-between items-center">
+                      <span className="font-medium text-gray-700">{category}:</span>
+                      <span className="font-bold text-purple-700">R$ {total.toFixed(2)}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+
+            {/* Profit Graph */}
+            <div className="mb-8">
+              <h3 className="text-xl font-semibold text-gray-700 mb-4">Lucro Demonstrativo (10% sobre valores pagos):</h3>
+              <div className="flex justify-center gap-4 mb-4">
+                <button
+                  onClick={() => setReportPeriod('weekly')}
+                  className={`py-2 px-4 rounded-lg transition-colors
+                    ${reportPeriod === 'weekly' ? 'bg-purple-600 text-white' : 'bg-gray-200 text-gray-700 hover:bg-purple-100'}`}
+                >
+                  Semanal
+                </button>
+                <button
+                  onClick={() => setReportPeriod('monthly')}
+                  className={`py-2 px-4 rounded-lg transition-colors
+                    ${reportPeriod === 'monthly' ? 'bg-purple-600 text-white' : 'bg-gray-200 text-gray-700 hover:bg-purple-100'}`}
+                >
+                  Mensal
+                </button>
+                <button
+                  onClick={() => setReportPeriod('annually')}
+                  className={`py-2 px-4 rounded-lg transition-colors
+                    ${reportPeriod === 'annually' ? 'bg-purple-600 text-white' : 'bg-gray-200 text-gray-700 hover:bg-purple-100'}`}
+                >
+                  Anual
+                </button>
+              </div>
+              {getProfitGraphData().length === 0 ? (
+                <p className="text-center text-gray-600">Nenhum dado para o gráfico no período selecionado.</p>
+              ) : (
+                <ResponsiveContainer width="100%" height={300}>
+                  <LineChart
+                    data={getProfitGraphData()}
+                    margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="name" />
+                    <YAxis />
+                    <Tooltip formatter={(value) => `R$ ${parseFloat(value).toFixed(2)}`} />
+                    <Legend />
+                    <Line type="monotone" dataKey="Valor Pago" stroke="#8884d8" activeDot={{ r: 8 }} />
+                    <Line type="monotone" dataKey="Lucro (10%)" stroke="#82ca9d" />
+                  </LineChart>
+                </ResponsiveContainer>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Confirmation Modal */}
+        {showConfirmModal && itemToDelete && (
+          <div className="fixed inset-0 bg-gray-600 bg-opacity-75 flex items-center justify-center z-50">
+            <div className="bg-white p-6 rounded-xl shadow-lg max-w-sm w-full text-center">
+              <h3 className="text-xl font-bold text-gray-800 mb-4">Confirmar Exclusão</h3>
+              <p className="text-gray-700 mb-6">
+                Tem certeza que deseja excluir **{itemToDelete.name || itemToDelete.description}** ({itemToDelete.type})?
+                Esta ação não pode ser desfeita.
+              </p>
+              <div className="flex justify-center gap-4">
+                <button
+                  onClick={() => setShowConfirmModal(false)}
+                  className="bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-4 rounded-lg transition-colors"
+                >
+                  Não
+                </button>
+                <button
+                  onClick={executeDeletion}
+                  className="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-lg transition-colors"
+                  disabled={loading}
+                >
+                  {loading ? 'Excluindo...' : 'Sim, Excluir'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+export default App;
